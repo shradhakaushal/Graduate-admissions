@@ -1,0 +1,356 @@
+---
+title: "Final project"
+output: html_notebook
+---
+
+
+```{r}
+rm(list = ls())
+
+```
+
+
+```{r}
+GRE <- read.csv("C:\\Users\\HP\\Downloads\\graduate-admissions\\Admission_Predict.csv")
+GRE$University.Rating <- factor(GRE$University.Rating)
+GRE$Research <- factor(GRE$Research)
+```
+
+```{r}
+library(GGally)
+library(dplyr)
+library(MASS)
+library(caTools)
+library(forecast)
+library(lmvar)
+library(DAAG)
+library(ggplot2)
+library(rpart)
+library(corrplot)
+library(glmnet)
+library(dummies)
+library(klaR)
+library(e1071)
+```
+
+
+```{r}
+install.packages("rlang", type = "source")
+```
+
+#Data Exploration
+```{r}
+#ggpairs function from the ggplot2 library is an excellent way to look at the distributions of the variables with the pearson correlation coeffecient. In the plot we can see that almost all of the variables follow normal distribution and also it is apparent that GRE score and TOEFL score have the highest correlation with the chance of getting an admission.
+ggpairs(GRE)
+```
+
+```{r}
+#Correlation matrix using the library corrplot. This works in tge same way as the ggpairs except we don't get to see the distribution here. Also we can see that CGPA counts towards the most important variable in getting the admission to a university
+
+corVar <- cor(GRE)
+corSort <- as.matrix(sort(corVar[,"Chance.of.Admit"], decreasing = TRUE))
+corHigh <- names(which(apply(corSort,1 , function(x) abs(x) > 0.5 )))
+corVar <- corVar[corHigh, corHigh]
+
+corplot <- corrplot.mixed(corVar, tl.col="black", tl.pos = "lt")
+```
+
+
+```{r}
+#GRE Score
+summary(GRE$GRE.Score)
+chisq.test(GRE$GRE.Score,GRE$Chance.of.Admit)
+ggplot(GRE,aes(x=GRE.Score,y=Chance.of.Admit))+geom_point()+geom_smooth()+ggtitle("Chances of Admit vs GRE Score")
+#it is clear from the plot that chances of admit increase with an increase in the GRE score
+#Chi Square test:P value is less than 0.05, So rejecting Null Hypothesis and accepting Alternate Hypothesis.It means chance of admission is depending on GRE Score.
+```
+
+```{r}
+ggplot(GRE,aes(x=TOEFL.Score,y=Chance.of.Admit))+geom_point()+geom_smooth()+ggtitle("Chances of Admit vs TOEFL Score")
+#There is an increasing linear relationship between the TOEFL score and chances of admit 
+```
+```{r}
+ggplot(GRE,aes(x=GRE.Score,y=Chance.of.Admit,col=SOP))+geom_point()
+#The chance of getting an admit increases with a good CGPA and a research backgroundand the best strength of SOP's being contributing to the chance of getting an admission. However, we can see that some SOP's with less strength(4,3) also contribute to getting the admission, but in that case the GRE score is really high
+
+```
+
+```{r}
+ggplot(GRE,aes(x=CGPA,y=Chance.of.Admit,col=Research))+geom_point()
+#We can see that higher the CGPA, higher the chance of getting an admission depite a good research background. However, in some cases without no research experience, the chance og getting an admit is high. In that case the CGPA is very high too. We can conclude from the correlation and this plot that CGPA is more important however having a good research background certainly helps. 
+
+```
+```{r}
+ggplot(GRE,aes(x=CGPA,y=Chance.of.Admit,col=University.Rating))+geom_point()
+
+```
+
+```{r}
+#Outlier Detection
+outliers <- function(x) 
+{
+  for(i in 1:ncol(x))
+  {
+    sd_i <- sd(x[,i])
+    mean_i <- mean(x[,i])
+    
+    out = x[x[,i] > 3*sd_i+mean_i | x[,i] < mean_i-3*sd_i, ]
+    if(nrow(out) > 0)
+    {
+      print(colnames(x)[i])
+      paste("The outliers are -", out)
+    }else
+    {
+      print(paste("No outliers for",colnames(x)[i]))
+    }
+  }
+}
+outliers(GRE)
+```
+
+#train test split
+```{r}
+#train test split
+library(caret)
+set.seed(1234) #set seed to make our partition reproducable
+split_data <- createDataPartition(GRE$Chance.of.Admit, p = 0.8, list = FALSE)#p = 0.8 makes 80% train and 20% test
+train_data <- GRE[split_data,]
+test_data <- GRE[-split_data,]
+```
+
+
+#regression
+```{r}
+#The model has r-squared of 0.80 which means that 80% of variance in the data is explained by this model. There is no discernable pattern in the residual vs fitted value plot. The qq plot is almost a straight line which means it follows a normal distribution. And we can see there are no important data points from the leverage plot that can produce a change in the model.
+
+model1 <- lm(Chance.of.Admit ~ . -Serial.No., data = train_data)
+summary(model1)
+plot(model1)
+```
+
+
+```{r}
+#stepwise regression
+model2 <- stepAIC(model1, direction = "both", trace = FALSE)
+summary(model2)
+#we see that SOP is not significant to the model and now all the features are statistically sigificant
+```
+
+
+#Without the serial No
+```{r}
+dfR <- GRE[-1]
+set.seed(123)
+sample = sample.split(dfR, SplitRatio = 0.75)
+train_dfR <- subset(dfR, sample==TRUE)
+test_dfR <- subset(dfR, sample==FALSE)
+
+```
+
+
+```{r}
+fit = lm(Chance.of.Admit ~ ., data = GRE)
+summary(fit)
+fit1 = lm(dfR$Chance.of.Admit ~ . -SOP -University.Rating -Serial.No., data = GRE)
+summary(fit1)
+fit2 = lm(Chance.of.Admit ~ . -SOP -University.Rating -Serial.No. , data = train_data)
+summary(fit2)
+```
+#K-folds 
+```{r}
+#k-folds
+cv_lm = CVlm(data = GRE, form.lm = fit2, m=10)
+
+```
+
+```{r}
+plot(cv_lm$cvpred,cv_lm$Predicted)
+head(cv_lm,10)
+RMSD_origin<-sqrt(mean((cv_lm$cvpred-cv_lm$Chance.of.Admit)^2))
+```
+```{r}
+RMSD_origin
+#The model is a good fit since the root mean squared error is low
+```
+
+```{r}
+#Ridge regression
+x_train <- model.matrix(train_dfR$Chance.of.Admit ~., data = train_dfR)[,-1]
+y_train <- train_dfR$Chance.of.Admit
+
+x_test <- model.matrix(test_dfR$Chance.of.Admit ~., data = test_dfR)[,-1]
+y_test <- test_dfR$Chance.of.Admit
+
+lamdas <- 10^seq(10, -2, length = 100)
+
+fit <- glmnet(x_train, y_train, alpha = 0, lambda = lamdas) 
+summary(fit)
+```
+
+```{r}
+cv_fit <- cv.glmnet(x_train, y_train , alpha = 0, lambda = lamdas)
+
+#we will plot this function and find out the best lambda value
+
+plot(cv_fit)
+```
+
+```{r}
+opt_lamda <- cv_fit$lambda.min
+ridge_mod <- glmnet(x_train, y_train , alpha = 0, lambda = opt_lamda)
+summary(ridge_mod)
+```
+
+```{r}
+ridge.predict <- predict(ridge_mod, s = opt_lamda, newx = x_test)
+MSE_ridge <- mean((ridge.predict - y_test)^2) # 0.00413907
+RMSE_ridge <- sqrt(MSE) # 0.06435
+MAE_ridge <- mean(abs(y_test - ridge.predict)) #0.04486171
+```
+
+
+```{r}
+#Logistic Regression
+#To use  logistic regression, we first have to make dummy variables. We will also convert chance of admit to 0 or 1, if it is above 72% then the chance of admit will be considered 1 else 0.
+table(dfR$Chance.of.Admit > 0.5) # False = 35, True = 365
+dfR$get_admission = as.factor(ifelse(dfR$Chance.of.Admit > 0.72,1,0)) #False = 196, True = 204
+table(dfR$Chance.of.Admit > 0.72)
+df1 <- dummy(dfR$University.Rating)
+df2 <- dummy(dfR$LOR)
+df3 <- dummy(dfR$SOP)
+df_new <- cbind(data.frame(df1, df2, df3, dfR$GRE.Score, dfR$TOEFL.Score, dfR$CGPA, dfR$Research, dfR$get_admission))
+```
+
+```{r}
+set.seed(1000)
+indx= sample(1:nrow(df_new), 0.7*nrow(df_new))
+train_new = df_new[indx,]
+test_new = df_new[-indx,]
+
+
+```
+
+```{r}
+model1_log = glm(dfR.get_admission ~ ., data = train_new, family = "binomial")
+summary(model1)
+```
+
+
+```{r}
+model_log1 <- glm( formula = dfR.get_admission ~ SOP1.5+SOP2+SOP3.5+SOP4.5+LOR2+LOR2.5+LOR4+LOR4.5+University.Rating2+University.Rating3+University.Rating5,family = "binomial", data = train_new)
+summary(model_log1) #AIC is 270.7
+```
+
+```{r}
+model1.1 <- glm( formula = dfR.get_admission ~ dfR.TOEFL.Score + dfR.CGPA + dfR.Research + SOP1.5+SOP2+SOP3.5+SOP4.5+LOR2+LOR2.5+LOR4+LOR4.5+University.Rating2+University.Rating3+University.Rating5,family = "binomial", data = train_new)
+summary(model1.1)
+```
+
+```{r}
+model1.8 <- glm( formula = dfR.get_admission ~ dfR.GRE.Score + dfR.CGPA + dfR.Research + LOR5+SOP4.5+University.Rating2 + SOP2 + SOP4 + LOR4,family = "binomial", data = train_new)
+summary(model1.8)
+```
+
+```{r}
+predictTrain = predict(model1.8, type="response")
+summary(predictTrain)
+table(train_new$dfR.get_admission, predictTrain > 0.5)
+table(train_new$dfR.get_admission, predictTrain > 0.4)
+```
+
+```{r}
+predictTest = predict(model1.8, type = "response", newdata = test_new)
+table(test_new$dfR.get_admission,predictTest >= 0.5) 
+#Accuracy is ~87%
+```
+
+
+#Decision Trees
+```{r}
+#In order for the decision trees to run, i changed the variable of chance of admit into 4 categories namely: very low(VL), low(LO), medium(M) and high(H)
+dfR$chanceCat = cut(dfR$Chance.of.Admit, breaks = c(0.34,0.64,0.73,0.83,0.97), right = TRUE, labels = c("VL","LO","M","H"))
+train_dfR$chancecat = cut(train_dfR$Chance.of.Admit, breaks = c(0.34,0.64,0.73,0.83,0.97), right = TRUE, labels = c("VL","LO","M","H"))
+test_dfR$chancecat = cut(test_dfR$Chance.of.Admit, breaks = c(0.34,0.64,0.73,0.83,0.97), right = TRUE, labels = c("VL","LO","M","H"))
+```
+
+
+```{r}
+#Decision trees
+fit = rpart(train_dfR$chancecat~ .-Chance.of.Admit ,data = train_dfR, method = "class")
+summary(fit)
+library(rpart.plot)
+```
+
+```{r}
+
+rpart.plot(fit, extra = 106)
+```
+
+```{r}
+# Predict on test and evaluate
+predict_unseen = predict(fit, test_dfR, type="class")
+table_mat = table(test_dfR$chancecat,predict_unseen)
+accuracy_Test = sum(diag(table_mat))/sum(table_mat)
+accuracy_Test
+table_mat
+```
+
+#Ensemble model KNN-regression
+
+```{r}
+target_data <- dfR$Chance.of.Admit
+list <- c(1,2,6)
+for(i in list)
+{
+  train_dfR[,i] <- (train_dfR[,i] - min(train_dfR[,i])) / (max(train_dfR[,i]) -
+                                                               min(train_dfR[,i]))
+}
+kNN.reg <- function(new_data, target_data, train_dfR, k)
+{
+  n <- nrow(train_dfR)
+  d <- rep(0,n)
+  for (i in 1:n) 
+  {
+    d[i] <- sqrt(sum((train_dfR[i,1:7] - new_data[1:7])^2))
+  }
+  o <- order(d)
+  m <- mean(target_data[o[1:k]]) 
+  return(m)
+}
+```
+
+#New Data point
+```{r}
+#trying to predict the chance of admit of a student in a University rated as 3 would be given GRE score of 325; TOEFL score of 106; SOP and LOR strength rating to be a 3/5; CGPA 8.2/10 with the highest research experience of 1 would be 0.73.
+new_data <- c(325, 106, 3, 3, 3, 8.2, 1)
+```
+
+
+```{r}
+for(i in list){
+    new_data[i] <- (new_data[i] - min(train_dfR[,i])) / (max(train_dfR[,i]) -
+                                                               min(train_dfR[,i]))
+}
+
+kNN.reg(new_data, target_data, train_dfR, 4)
+```
+```{r}
+list <- c(1,2,6)
+for(i in list)
+{
+  test_dfR[,i] <- (test_dfR[,i] - min(test_dfR[,i])) / (max(test_dfR[,i]) -
+                                                               min(test_dfR[,i]))
+}
+pred_knn <- vector("list", 100)
+for (i in 1:100){
+  pred_knn[i] <- kNN.reg(test_dfR[i,], target_data, train_dfR, 4)
+}
+```
+
+
+```{r}
+pred_knnreg <- cbind(test_dfR$Chance.of.Admit, pred_knn)
+pred_knreg <- as.data.frame.matrix(pred_knnreg)
+
+```
+
